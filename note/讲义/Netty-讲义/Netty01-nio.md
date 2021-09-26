@@ -2952,6 +2952,437 @@ public class WriteClient {
 * 单线程配一个选择器，专门处理 accept 事件
 * 创建 cpu 核心数的线程，每个线程配一个选择器，轮流处理 read 事件
 
+![image-20210926094714538](Netty01-nio.assets/image-20210926094714538.png)
+
+**问题：**
+
+服务端代码:
+
+```java
+/**
+ * 多线程处理连接
+ * 其中Boss线程，专门用来处理连接，
+ * worker线程专门进行读写操作
+ */@Slf4j
+public class MultiThreadServer {
+    public static void main(String[] args) throws IOException {
+        Thread.currentThread().setName("Boss");
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.configureBlocking(false);
+        Selector boss = Selector.open();
+        SelectionKey bossKey = ssc.register(boss, 0, null);
+        bossKey.interestOps(SelectionKey.OP_ACCEPT);
+        ssc.bind(new InetSocketAddress(8080));
+
+        //并不是创建一个连接就创建一个worker，而是一个或几个（cpu核数）个worker去处理多个channel
+        //因为不能无限制的去创建Thread
+        //所以要创建固定数量的worker
+        Worker worker = new Worker("worker-0");
+        worker.register();
+
+        while (true){
+            boss.select();
+            Iterator<SelectionKey> iter = boss.selectedKeys().iterator();
+            while (iter.hasNext()){
+                SelectionKey key = iter.next();
+                iter.remove();
+                if (key.isAcceptable()){
+                    SocketChannel sc = ssc.accept();
+                    sc.configureBlocking(false);
+                    log.debug("connected ... {}",sc.getRemoteAddress());
+                    //2.关联到worker的selector上，而不是关联到Boss的selector上
+                    //由于worker是静态内部类，所以，可以访问其私有变量
+                    log.debug("before register ... {}",sc.getRemoteAddress());
+                    sc.register(worker.selector,SelectionKey.OP_READ,null);
+                    log.debug("after register ... {}",sc.getRemoteAddress());
+                }
+            }
+        }
+    }
+
+    static class Worker implements Runnable{
+        private Thread thread;  //处理selector的线程
+        private Selector selector;
+        private String name;
+        private volatile boolean start = false;  //用来标记线程和selector是否初始化
+
+        public Worker(String name){
+            this.name = name;
+        }
+        //初始化线程和Selector
+        public void register() throws IOException {
+            if(!start){
+                thread = new Thread(this,name);
+                thread.start();
+                selector = Selector.open();
+                start = true;
+            }
+        }
+
+        @Override
+        public void run() {
+            while (true){
+                try {
+                    selector.select();
+                    Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+                    while (iter.hasNext()){
+                        SelectionKey key = iter.next();
+                        iter.remove();
+                        if(key.isReadable()){
+                            ByteBuffer byteBuffer = ByteBuffer.allocate(16);
+                            SocketChannel channel = (SocketChannel) key.channel();
+                            log.debug("read ... {}",channel.getRemoteAddress());
+                            channel.read(byteBuffer);
+                            byteBuffer.flip();
+                            debugAll(byteBuffer);
+                        }
+                    }
+                }
+                catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+```
+
+客户端代码：
+
+```java
+public class MultiThreadClient {
+    public static void main(String[] args) throws IOException {
+        SocketChannel sc = SocketChannel.open();
+        sc.connect(new InetSocketAddress("localhost",8080));
+        sc.write(Charset.defaultCharset().encode("1234567890abcdef"));
+        System.in.read();
+    }
+}
+```
+
+执行结果
+
+![image-20210926102510883](Netty01-nio.assets/image-20210926102510883.png)
+
+虽然客户端发送了消息，但是服务端这里还是无法收到。
+
+这是由于以下两端代码的执行顺序造成的
+
+```java
+@Override
+public void run() {
+    while (true){
+        try {
+            selector.select();  //worker-0
+            
+sc.register(worker.selector,SelectionKey.OP_READ,null); //boss
+```
+
+由于worker先被创建并初始化，然后woker调用register()方法，就执行了run方法，这时，selector已经调用了select()方法进入了阻塞状态。
+
+然后，当有accept事件发生，给SocketChannel进行selector注册时，selector已经阻塞了，所以没有办法进行注册。所以，问题的根本就在于，selector调用select()方法进入阻塞后，再向这个selector进行注册都是无效的
+
+**解决：进程间通信的版本**
+
+```java
+/**
+ * 多线程处理连接
+ * 其中Boss线程，专门用来处理连接，
+ * worker线程专门进行读写操作
+ */@Slf4j
+public class MultiThreadServer {
+    public static void main(String[] args) throws IOException {
+        Thread.currentThread().setName("Boss");
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.configureBlocking(false);
+        Selector boss = Selector.open();
+        SelectionKey bossKey = ssc.register(boss, 0, null);
+        bossKey.interestOps(SelectionKey.OP_ACCEPT);
+        ssc.bind(new InetSocketAddress(8080));
+
+        //并不是创建一个连接就创建一个worker，而是一个或几个（cpu核数）个worker去处理多个channel
+        //因为不能无限制的去创建Thread
+        //所以要创建固定数量的worker
+        Worker worker = new Worker("worker-0");
+
+        while (true){
+            boss.select();
+            Iterator<SelectionKey> iter = boss.selectedKeys().iterator();
+            while (iter.hasNext()){
+                SelectionKey key = iter.next();
+                iter.remove();
+                if (key.isAcceptable()){
+                    SocketChannel sc = ssc.accept();
+                    sc.configureBlocking(false);
+                    log.debug("connected ... {}",sc.getRemoteAddress());
+                    //2.关联到worker的selector上，而不是关联到Boss的selector上
+                    log.debug("before register ... {}",sc.getRemoteAddress());
+                    worker.register(sc);    //boss
+                    log.debug("after register ... {}",sc.getRemoteAddress());
+                }
+            }
+        }
+    }
+
+    static class Worker implements Runnable{
+        private Thread thread;  //处理selector的线程
+        private Selector selector;
+        private String name;
+        private volatile boolean start = false;  //用来标记线程和selector是否初始化
+        //用来进行线程间的通信，将主线程中的SocketChannel传递给work线程的run方法，实现线程间通信
+        private ConcurrentLinkedDeque<Runnable> queue = new ConcurrentLinkedDeque<>();
+
+        public Worker(String name){
+            this.name = name;
+        }
+        //初始化线程和Selector
+        public void register(SocketChannel sc) throws IOException {
+            if(!start){
+                selector = Selector.open();
+                thread = new Thread(this,name);
+                thread.start();
+                start = true;
+            }
+            //向队列中，添加了任务，但是任务并没有执行。
+            queue.add(() -> {
+                try {
+                    sc.register(selector,SelectionKey.OP_READ,null);
+                } catch (ClosedChannelException e) {
+                    e.printStackTrace();
+                }
+            });
+            selector.wakeup();  //唤醒select，让select从阻塞状态激活，
+        }
+
+        @Override
+        public void run() {
+            while (true){
+                try {
+                    selector.select();  //worker-0
+                    //将队列中添加的任务拿出来，执行，因为每次在队列中添加任务之后，会调用selector.wakeup()激活selector,然后就能将事件注册
+                    Runnable task = queue.poll();   //这个任务就是SocketChannel注册到selector的代码
+                    if (task != null){
+                        task.run();
+                    }
+
+                    Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+                    while (iter.hasNext()){
+                        SelectionKey key = iter.next();
+                        iter.remove();
+                        if(key.isReadable()){
+                            ByteBuffer byteBuffer = ByteBuffer.allocate(16);
+                            SocketChannel channel = (SocketChannel) key.channel();
+                            log.debug("read ... {}",channel.getRemoteAddress());
+                            channel.read(byteBuffer);
+                            byteBuffer.flip();
+                            debugAll(byteBuffer);
+                        }
+                    }
+                }
+                catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+```
+
+**解决：wakeup()方法的版本**
+
+```java
+@Slf4j
+public class MultiThreadServer2 {
+    public static void main(String[] args) throws IOException {
+        Thread.currentThread().setName("Boss");
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.configureBlocking(false);
+        Selector boss = Selector.open();
+        SelectionKey bossKey = ssc.register(boss, 0, null);
+        bossKey.interestOps(SelectionKey.OP_ACCEPT);
+        ssc.bind(new InetSocketAddress(8080));
+
+        //并不是创建一个连接就创建一个worker，而是一个或几个（cpu核数）个worker去处理多个channel
+        //因为不能无限制的去创建Thread
+        //所以要创建固定数量的worker
+        Worker worker = new Worker("worker-0");
+
+        while (true){
+            boss.select();
+            Iterator<SelectionKey> iter = boss.selectedKeys().iterator();
+            while (iter.hasNext()){
+                SelectionKey key = iter.next();
+                iter.remove();
+                if (key.isAcceptable()){
+                    SocketChannel sc = ssc.accept();
+                    sc.configureBlocking(false);
+                    log.debug("connected ... {}",sc.getRemoteAddress());
+                    //2.关联到worker的selector上，而不是关联到Boss的selector上
+                    log.debug("before register ... {}",sc.getRemoteAddress());
+                    worker.register(sc);    //boss
+                    log.debug("after register ... {}",sc.getRemoteAddress());
+                }
+            }
+        }
+    }
+
+    static class Worker implements Runnable{
+        private Thread thread;  //处理selector的线程
+        private Selector selector;
+        private String name;
+        private volatile boolean start = false;  //用来标记线程和selector是否初始化
+        //无线程通信的案例
+
+        public Worker(String name){
+            this.name = name;
+        }
+        //初始化线程和Selector
+        public void register(SocketChannel sc) throws IOException {
+            if(!start){
+                selector = Selector.open();
+                thread = new Thread(this,name);
+                thread.start();
+                start = true;
+            }
+            //每次注册，直接调用wakeup()方法，类似于Park,UnPark的机制。只要调用了wakeup().就算后面调用了select()
+            //也不会进行阻塞
+            selector.wakeup();
+            sc.register(selector,SelectionKey.OP_READ,null);
+        }
+
+        @Override
+        public void run() {
+            while (true){
+                try {
+                    selector.select();  //worker-0
+                    Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+                    while (iter.hasNext()){
+                        SelectionKey key = iter.next();
+                        iter.remove();
+                        if(key.isReadable()){
+                            ByteBuffer byteBuffer = ByteBuffer.allocate(16);
+                            SocketChannel channel = (SocketChannel) key.channel();
+                            log.debug("read ... {}",channel.getRemoteAddress());
+                            channel.read(byteBuffer);
+                            byteBuffer.flip();
+                            debugAll(byteBuffer);
+                        }
+                    }
+                }
+                catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+```
+
+多Worker版本
+
+```java
+@Slf4j
+public class MultiThreadServer2 {
+    public static void main(String[] args) throws IOException {
+        Thread.currentThread().setName("Boss");
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.configureBlocking(false);
+        Selector boss = Selector.open();
+        SelectionKey bossKey = ssc.register(boss, 0, null);
+        bossKey.interestOps(SelectionKey.OP_ACCEPT);
+        ssc.bind(new InetSocketAddress(8080));
+
+        /**核心代码**/
+        
+        //并不是创建一个连接就创建一个worker，而是一个或几个（cpu核数）个worker去处理多个channel
+        //因为不能无限制的去创建Thread
+        //所以要创建固定数量的worker
+        //Runtime.getRuntime().availableProcessors() 获取本机上有几个核心可用
+        Worker[] workers = new Worker[Runtime.getRuntime().availableProcessors()];
+        for (int i = 0; i < workers.length; i++) {
+            workers[i] = new Worker("worker-" + i);
+        }
+        AtomicInteger counter = new AtomicInteger(0);
+
+
+        while (true){
+            boss.select();
+            Iterator<SelectionKey> iter = boss.selectedKeys().iterator();
+            while (iter.hasNext()){
+                SelectionKey key = iter.next();
+                iter.remove();
+                if (key.isAcceptable()){
+                    SocketChannel sc = ssc.accept();
+                    sc.configureBlocking(false);
+                    log.debug("connected ... {}",sc.getRemoteAddress());
+                    //2.关联到worker的selector上，而不是关联到Boss的selector上
+                    log.debug("before register ... {}",sc.getRemoteAddress());
+                    //round robin轮询处理不同客户端的连接
+                    workers[counter.getAndIncrement() % workers.length].register(sc);    //boss
+                    log.debug("after register ... {}",sc.getRemoteAddress());
+                }
+            }
+        }
+    }
+
+    static class Worker implements Runnable{
+        private Thread thread;  //处理selector的线程
+        private Selector selector;
+        private String name;
+        private volatile boolean start = false;  //用来标记线程和selector是否初始化
+        //无线程通信的案例
+
+        public Worker(String name){
+            this.name = name;
+        }
+        //初始化线程和Selector
+        public void register(SocketChannel sc) throws IOException {
+            if(!start){
+                selector = Selector.open();
+                thread = new Thread(this,name);
+                thread.start();
+                start = true;
+            }
+            //每次注册，直接调用wakeup()方法，类似于Park,UnPark的机制。只要调用了wakeup().就算后面调用了select()
+            //也不会进行阻塞
+            selector.wakeup();
+            sc.register(selector,SelectionKey.OP_READ,null);
+        }
+
+        @Override
+        public void run() {
+            while (true){
+                try {
+                    selector.select();  //worker-0
+                    Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+                    while (iter.hasNext()){
+                        SelectionKey key = iter.next();
+                        iter.remove();
+                        if(key.isReadable()){
+                            ByteBuffer byteBuffer = ByteBuffer.allocate(16);
+                            SocketChannel channel = (SocketChannel) key.channel();
+                            log.debug("read ... {}",channel.getRemoteAddress());
+                            channel.read(byteBuffer);
+                            byteBuffer.flip();
+                            debugAll(byteBuffer);
+                        }
+                    }
+                }
+                catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
+```
+
+
+
+
+
+
+
 
 
 ```java
@@ -3172,10 +3603,10 @@ public class UdpClient {
 
 ### 5.2 IO 模型
 
-同步阻塞、同步非阻塞、同步多路复用、异步阻塞（没有此情况）、异步非阻塞
+同步阻塞、同步非阻塞、同步多路复用、异步阻塞（没有此情况，都异步了，还阻塞个锤子）、异步非阻塞
 
-* 同步：线程自己去获取结果（一个线程）
-* 异步：线程自己不去获取结果，而是由其它线程送结果（至少两个线程）
+* **同步：线程自己去获取结果（全程一个线程参与）**
+* **异步：线程自己不去获取结果，而是由其它线程送结果（至少两个线程参与）**
 
 
 
@@ -3186,29 +3617,34 @@ public class UdpClient {
 
 ![](img/0033.png)
 
-* 阻塞 IO
+* 阻塞 IO，根据上面对同步异步的定义，说明它是同步的
 
   ![](img/0039.png)
 
-* 非阻塞  IO
+* 非阻塞  IO，线程不阻塞，while循环，一直查询，复制数据的时候，用户线程还是会阻塞其实真正的是等待数据阶段非阻塞，实际复制数据阶段还是阻塞的。 根据上面对同步异步的定义，说明它是同步的
 
   ![](img/0035.png)
 
-* 多路复用
+* 多路复用， 根据上面对同步异步的定义，说明它是同步的
 
   ![](img/0038.png)
 
 * 信号驱动
 
-* 异步 IO
+* 异步 IO， 根据上面对同步异步的定义，说明它是异步的
 
   ![](img/0037.png)
 
 * 阻塞 IO vs 多路复用
 
-  ![](img/0034.png)
+  
 
+  ![](img/0034.png)
+  如果在等待channel2连接的过程中，channel1又发了数据，这时候，只能空等，这就是阻塞IO最大的弊端，在一个channel等待accept的阶段，就不能处理其他channel的read/write事件
+  
   ![](img/0036.png)
+  
+  而多路复用则不一样了，如果在处理事件的时候，发生了一批事件，比如说在建立连接时，又出现了channel1 read,channel2 accept,channel3 read的事件，这些事件会在selector结束等待之后一并返回给selector，然后selector依次处理3个事件，并不会再出现等待建立连接才能处理读写的操作
 
 #### 🔖 参考
 
@@ -3261,7 +3697,7 @@ socket.getOutputStream().write(buf);
 通过 DirectByteBuf 
 
 * ByteBuffer.allocate(10)  HeapByteBuffer 使用的还是 java 内存
-* ByteBuffer.allocateDirect(10)  DirectByteBuffer 使用的是操作系统内存
+* ByteBuffer.allocateDirect(10)  DirectByteBuffer 使用的是操作系统内存，操作系统和java都可以访问此块内存
 
 ![](img/0025.png)
 

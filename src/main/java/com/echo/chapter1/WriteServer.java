@@ -76,7 +76,6 @@ public class WriteServer {
                         key.interestOps(key.interestOps() - SelectionKey.OP_WRITE);
                     }
                 }
-
                 iterator.remove();
             }
         }
