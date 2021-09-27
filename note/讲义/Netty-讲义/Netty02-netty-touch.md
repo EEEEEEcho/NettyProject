@@ -169,13 +169,13 @@ new Bootstrap()
 > * 把 msg 理解为流动的数据，最开始输入是 ByteBuf，但经过 pipeline 的加工，会变成其它类型对象，最后输出又变成 ByteBuf
 > * 把 handler 理解为数据的处理工序
 >   * 工序有多道，合在一起就是 pipeline，pipeline 负责发布事件（读、读取完成...）传播给每个 handler， handler 对自己感兴趣的事件进行处理（重写了相应事件处理方法）
->   * handler 分 Inbound 和 Outbound 两类
+>   * handler 分 Inbound 和 Outbound 两类，即入站工序和出站工序
 > * 把 eventLoop 理解为处理数据的工人
 >   * 工人可以管理多个 channel 的 io 操作，并且一旦工人负责了某个 channel，就要负责到底（绑定）
 >   * 工人既可以执行 io 操作，也可以进行任务处理，每位工人有任务队列，队列里可以堆放多个 channel 的待处理任务，任务分为普通任务、定时任务
 >   * 工人按照 pipeline 顺序，依次按照 handler 的规划（代码）处理数据，可以为每道工序指定不同的工人
 
-
+![image-20210927110144373](Netty02-netty-touch.assets/image-20210927110144373.png)
 
 ## 3. 组件
 
@@ -409,6 +409,12 @@ new ServerBootstrap()
 
 #### 💡 handler 执行中如何换人？
 
+如何将一个EventLoop执行的Handler的结果，交给流水线上下一个EventLoop执行的Handler
+
+回顾：**一个EventLoop（一个worker，分配的一个线程）执行一个channel的pipeline(流水线)上的一个或多个Handler(环节)，同时绑定该channel，如果下次该channel又激活了，那么它继续执行该channel上环节。但并不是这个channel上的所有handler(环节）都是由这一个线程线程执行的。**
+
+**工人按照 pipeline 顺序，依次按照 handler 的规划（代码）处理数据，可以为每道工序指定不同的工人**
+
 关键代码 `io.netty.channel.AbstractChannelHandlerContext#invokeChannelRead()`
 
 ```java
@@ -436,7 +442,7 @@ static void invokeChannelRead(final AbstractChannelHandlerContext next, Object m
 * 如果两个 handler 绑定的是同一个线程，那么就直接调用
 * 否则，把要调用的代码封装为一个任务对象，由下一个 handler 的线程来调用
 
-
+![image-20210927153201173](Netty02-netty-touch.assets/image-20210927153201173.png)
 
 #### 演示 NioEventLoop 处理普通任务
 
@@ -487,6 +493,120 @@ nioWorkers.scheduleAtFixedRate(() -> {
 ```
 
 > 可以用来执行定时任务
+
+#### 职责细分
+
+**细分1：**分离监视accept事件的worker和监视IO操作的worker。
+
+```java
+@Slf4j
+public class EventLoopServer {
+    public static void main(String[] args) {
+        new ServerBootstrap()
+                //划分group，一个group作为boss，只负责ServerSocketChannel上accept事件处理
+                // 第二个group作为worker 只负责socketChannel上的读写
+                // 因为一个worker只和一个channel绑定，所以作为boss的group只能占用一个线程
+                .group(new NioEventLoopGroup(),new NioEventLoopGroup(2))
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        nioSocketChannel.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override                          //没有使用StringDecoder，这个msg是ByteBuf类型
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                ByteBuf byteBuf = (ByteBuf)msg;
+                                log.debug(byteBuf.toString(Charset.defaultCharset()));
+                            }
+                        });
+                    }
+                })
+                .bind(8080);
+    }
+}
+```
+
+**细分2：**分离耗时较长的I/O操作
+
+服务端添加一个独立的EventLoopGroup处理耗时较长的I/O操作
+
+```java
+@Slf4j
+public class EventLoopServer {
+    public static void main(String[] args) {
+        //细分2：创建一个独立的EventLoopGroup,处理耗时的I/O
+        EventLoopGroup group = new DefaultEventLoopGroup();
+
+
+        new ServerBootstrap()
+                //划分group，一个group作为boss，只负责ServerSocketChannel上accept事件处理
+                // 第二个group作为worker 只负责socketChannel上的读写
+                // 因为一个worker只和一个channel绑定，所以作为boss的group只能占用一个线程
+                .group(new NioEventLoopGroup(),new NioEventLoopGroup(2))
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        nioSocketChannel.pipeline().addLast("handler1",new ChannelInboundHandlerAdapter(){
+                            @Override                          //没有使用StringDecoder，这个msg是ByteBuf类型
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                ByteBuf byteBuf = (ByteBuf)msg;
+                                log.debug(byteBuf.toString(Charset.defaultCharset()));
+                                //将消息传递给下一个handler
+                                ctx.fireChannelRead(msg);
+                            }
+                        })
+                                //再添加一个handler，名字为handler2，绑定的方法为HandlerAdapter中的channelRead,
+                                //这个handler2，是由group这个EventLoopGroup执行的
+                        .addLast(group,"handler2",new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                ByteBuf byteBuf = (ByteBuf)msg;
+                                log.debug(byteBuf.toString(Charset.defaultCharset()));
+                            }
+                        });
+                    }
+                })
+                .bind(8080);
+    }
+}
+```
+
+客户端
+
+```java
+public class EventLoopClient {
+    public static void main(String[] args) throws InterruptedException {
+        //1.启动类
+        Channel channel = new Bootstrap()
+                //2.添加EventLoop
+                .group(new NioEventLoopGroup())
+                //3.选择客户端channel实现
+                .channel(NioSocketChannel.class)
+                //4.添加处理器
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override   //在连接建立后被调用
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        //将字符串编码为ByteBuffer
+                        ch.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                //5.连接到服务器
+                .connect(new InetSocketAddress("localhost", 8080))
+                .sync() //阻塞方法，直到连接建立
+                .channel();//代表客户端和服务器之间的channel对象
+
+        System.out.println(channel);
+        System.out.println("");
+    }
+}
+```
+
+```bash
+15:12:59.848 [nioEventLoopGroup-4-1] DEBUG com.echo.chapter2.c2.EventLoopServer - hello1
+15:12:59.849 [defaultEventLoopGroup-2-1] DEBUG com.echo.chapter2.c2.EventLoopServer - hello1
+```
+
+
 
 
 
@@ -544,6 +664,87 @@ channelFuture.sync().channel().writeAndFlush(new Date() + ": hello world!");
 * 1 处返回的是 ChannelFuture 对象，它的作用是利用 channel() 方法来获取 Channel 对象
 
 **注意** connect 方法是异步的，意味着不等连接建立，方法执行就返回了。因此 channelFuture 对象中不能【立刻】获得到正确的 Channel 对象
+
+```java
+@Slf4j
+public class ChannelFutureDemo {
+    public static void main(String[] args) throws InterruptedException {
+        ChannelFuture channelFuture = new Bootstrap()
+                //2.添加EventLoop
+                .group(new NioEventLoopGroup())
+                //3.选择客户端channel实现
+                .channel(NioSocketChannel.class)
+                //4.添加处理器
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override   //在连接建立后被调用
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        //将字符串编码为ByteBuffer
+                        ch.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                //5.连接到服务器
+                //connect方法是一个异步非阻塞的，main线程调用了connect，并不关心过connect是否连接上了
+                //真正执行底层connect的是NIO线程，主线程只是发起了调用
+                .connect(new InetSocketAddress("localhost", 8080));
+
+        //channelFuture.sync();
+        //如果不调用sync()等待连接建立，主线程就会直接建立channel，这时，连接可能还没有建立
+        Channel channel = channelFuture.channel();
+        log.debug("{}",channel);
+        channel.writeAndFlush("Hello , world");
+    }
+}
+```
+
+解决：
+
+```java
+@Slf4j
+public class ChannelFutureDemo {
+    public static void main(String[] args) throws InterruptedException {
+        ChannelFuture channelFuture = new Bootstrap()   //带有Future,Promise的方法都是和异步方法配套使用的，用来处理结果
+                //2.添加EventLoop
+                .group(new NioEventLoopGroup())
+                //3.选择客户端channel实现
+                .channel(NioSocketChannel.class)
+                //4.添加处理器
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override   //在连接建立后被调用
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        //将字符串编码为ByteBuffer
+                        ch.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                //5.连接到服务器
+                //connect方法是一个异步非阻塞的，main线程调用了connect，并不关心过connect是否连接上了
+                //真正执行底层connect的是NIO线程，主线程只是发起了调用
+                .connect(new InetSocketAddress("localhost", 8080));
+
+        //如果不调用sync()等待连接建立，主线程就会直接建立channel，这时，连接可能还没有建立
+        //解决：1.使用sync()方法同步处理结果，等待NIO线程建立连接
+//        channelFuture.sync();//阻塞住当前线程，直到NIO线程建立连接完毕
+//        Channel channel = channelFuture.channel();
+//        log.debug("{}",channel);
+//        channel.writeAndFlush("Hello , world");
+
+        //解决：2.使用addListener(回调对象)方法处理异步结果
+        //NIO建立好连接之后，会调用(NIO线程调用，不是main线程调用)回调对象中的operationComplete方法处理结果
+        channelFuture.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture channelFuture) throws Exception {
+                //这个形参ChannelFuture和调用addListener的ChannelFuture是同一个
+                Channel channel = channelFuture.channel();
+                log.debug("{}",channel);
+                channel.writeAndFlush("Hello world");
+            }
+        });
+    }
+}
+```
+
+
+
+
 
 实验如下：
 
@@ -641,6 +842,62 @@ public class CloseFutureClient {
 }
 ```
 
+优雅关闭
+
+```java
+@Slf4j
+public class CloseFutureClient {
+    public static void main(String[] args) throws InterruptedException {
+        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
+
+        ChannelFuture channelFuture = new Bootstrap()
+                .group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        //以Debug模式来打印日志
+                        nioSocketChannel.pipeline().addLast(new LoggingHandler(LogLevel.DEBUG));
+
+                        nioSocketChannel.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                .connect(new InetSocketAddress("localhost", 8080));
+        Channel channel = channelFuture.sync().channel();
+        log.debug("{}",channel);
+
+
+        //获取用户输入的线程
+        new Thread(() -> {
+            Scanner scanner = new Scanner(System.in);
+            while (true){
+                String s = scanner.nextLine();
+                if ("q".equals(s)){
+                    channel.close();    //close()方法也是一个异步操作
+                    break;
+                }
+                channel.writeAndFlush(s);
+            }
+        },"Input-Thread").start();
+
+        // 获取CloseFuture对象，该对象是channel调用close方法之后的一个回调
+
+        ChannelFuture closeFuture = channel.closeFuture();
+        // 1）同步处理关闭，
+//        log.debug("waiting close ...");
+//        closeFuture.sync(); //调用close方法之后，等待关闭完成
+//        log.debug("处理关闭之后的操作");
+        //2）异步处理关闭
+        closeFuture.addListener((ChannelFutureListener) channelFuture1 -> {
+            log.debug("处理 关闭之后的操作");
+            //关闭EventLoopGroup
+            eventLoopGroup.shutdownGracefully();
+        });
+    }
+}
+```
+
 
 
 
@@ -694,7 +951,7 @@ public class CloseFutureClient {
 要点
 
 * 单线程没法异步提高效率，必须配合多线程、多核 cpu 才能发挥异步的优势
-* 异步并没有缩短响应时间，反而有所增加
+* 异步并没有缩短响应时间，反而有所增加，请求的响应时间反而增加了，但是单位时间内的吞吐量大幅增加
 * 合理进行任务拆分，也是利用异步的关键
 
 

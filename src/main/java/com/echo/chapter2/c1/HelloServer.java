@@ -25,7 +25,7 @@ public class HelloServer {
                         //添加别的handler
                         new ChannelInitializer<NioSocketChannel>() {
 
-                    @Override
+                    @Override       //该方法只有在连接建立后才会触发
                     protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
                         //6.在initChannel添加具体的handler
                         nioSocketChannel.pipeline().addLast(new StringDecoder());//将传输过来的ByteBuffer转为字符串
