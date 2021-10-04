@@ -1247,6 +1247,176 @@ ChannelHandler 用来处理 Channel 上的各种事件，分为入站、出站�
 
 打个比喻，每个 Channel 是一个产品的加工车间，Pipeline 是车间中的流水线，ChannelHandler 就是流水线上的各道工序，而后面要讲的 ByteBuf 是原材料，经过很多工序的加工：先经过一道道入站工序，再经过一道道出站工序最终变成产品
 
+```java
+@Slf4j
+public class PipeLineServer {
+    public static void main(String[] args) {
+        new ServerBootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel channel) throws Exception {
+                        //1.连接建立以后，就可以拿到该连接的channel对象，通过channel获取pipeline
+                        ChannelPipeline pipeline = channel.pipeline();
+                        //2.添加处理器。在添加处理器之前，netty会自动帮我们添加两个处理器，一个叫headHandler
+                        //一个叫tailHandler。我们自己添加的handler会添加到这两个handler之间
+                        pipeline.addLast("handler1",new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                log.debug("1");
+                                super.channelRead(ctx,msg);
+                            }
+                        });
+                        pipeline.addLast("handler2",new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                log.debug("2");
+                                super.channelRead(ctx,msg);
+                            }
+                        });
+                        pipeline.addLast("handler3",new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                log.debug("3");
+                                super.channelRead(ctx,msg);
+                            }
+                        });
+                        //headHandler -> handler1 -> handler2 -> handler3 -> tailHandler
+
+                        pipeline.addLast("handler4",new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                                log.debug("4");
+                                super.write(ctx, msg, promise);
+                            }
+                        });
+                        pipeline.addLast("handler5",new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                                log.debug("5");
+                                super.write(ctx, msg, promise);
+                            }
+                        });
+                        pipeline.addLast("handler6",new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                                log.debug("6");
+                                super.write(ctx, msg, promise);
+                            }
+                        });
+
+                        //headHandler -> handler1 -> handler2 -> handler3 -> handler4 -> handler5 -> handler6 ->tailHandler
+                    }
+                })
+                .bind(8080);
+    }
+}
+```
+
+```java
+@Slf4j
+public class PipeLineClient {
+    public static void main(String[] args) throws InterruptedException {
+        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
+
+        ChannelFuture channelFuture = new Bootstrap()
+                .group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        //以Debug模式来打印日志
+                        nioSocketChannel.pipeline().addLast(new LoggingHandler(LogLevel.DEBUG));
+
+                        nioSocketChannel.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                .connect(new InetSocketAddress("localhost", 8080));
+        Channel channel = channelFuture.sync().channel();
+        log.debug("{}",channel);
+
+
+        //获取用户输入的线程
+        new Thread(() -> {
+            Scanner scanner = new Scanner(System.in);
+            while (true){
+                String s = scanner.nextLine();
+                if ("q".equals(s)){
+                    channel.close();    //close()方法也是一个异步操作
+                    break;
+                }
+                channel.writeAndFlush(s);
+            }
+        },"Input-Thread").start();
+
+
+        ChannelFuture closeFuture = channel.closeFuture();
+        //2）异步处理关闭
+        closeFuture.addListener((ChannelFutureListener) channelFuture1 -> {
+            log.debug("处理 关闭之后的操作");
+            //关闭EventLoopGroup
+            eventLoopGroup.shutdownGracefully();
+        });
+    }
+}
+```
+
+```bash
+21:29:25.146 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 1
+21:29:25.146 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 2
+21:29:25.146 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 3
+21:29:25.147 [nioEventLoopGroup-2-2] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 1, cap: 1024) that reached at the tail of the pipeline. Please check your pipeline configuration.
+21:29:25.156 [nioEventLoopGroup-2-2] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded message pipeline : [handler1, handler2, handler3, handler4, handler5, handler6, DefaultChannelPipeline$TailContext#0]. Channel : [id: 0x46f2932f, L:/127.0.0.1:8080 - R:/127.0.0.1:62963]
+```
+
+虽然绑定了OutBoundHandler，但是没有往外写数据，也不会触发OutBoundHandler。
+
+
+
+只有往外写数据之后，才会触发OutBoundHandler,而且OutBoundHandler的触发顺序与定义顺序相反
+
+```java
+pipeline.addLast("handler3",new ChannelInboundHandlerAdapter(){
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        log.debug("3");
+        super.channelRead(ctx,msg);
+        //写出数据
+        channel.writeAndFlush(ctx.alloc().buffer().writeBytes("Server".getBytes()));
+    }
+});
+//headHandler -> handler1 -> handler2 -> handler3 -> tailHandler
+
+pipeline.addLast("handler4",new ChannelOutboundHandlerAdapter(){
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        log.debug("4");
+        super.write(ctx, msg, promise);
+    }
+});
+```
+
+```java
+21:36:35.011 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 1
+21:36:35.011 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 2
+21:36:35.011 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 3
+21:36:35.011 [nioEventLoopGroup-2-2] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 1, cap: 1024) that reached at the tail of the pipeline. Please check your pipeline configuration.
+21:36:35.020 [nioEventLoopGroup-2-2] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded message pipeline : [handler1, handler2, handler3, handler4, handler5, handler6, DefaultChannelPipeline$TailContext#0]. Channel : [id: 0x6c1f8281, L:/127.0.0.1:8080 - R:/127.0.0.1:57440].
+21:36:35.022 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 6
+21:36:35.022 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 5
+21:36:35.022 [nioEventLoopGroup-2-2] DEBUG com.echo.chapter2.c4.PipeLineServer - 4
+```
+
+
+
+
+
+
+
+
+
 
 
 先搞清楚顺序，服务端
@@ -1401,7 +1571,7 @@ private static void log(ByteBuf buffer) {
 
 #### 2）直接内存 vs 堆内存
 
-可以使用下面的代码来创建池化基于堆的 ByteBuf
+ 
 
 ```java
 ByteBuf buffer = ByteBufAllocator.DEFAULT.heapBuffer(10);
@@ -1660,7 +1830,7 @@ try {
 * 起点，对于 NIO 实现来讲，在 io.netty.channel.nio.AbstractNioByteChannel.NioByteUnsafe#read 方法中首次创建 ByteBuf 放入 pipeline（line 163 pipeline.fireChannelRead(byteBuf)）
 * 入站 ByteBuf 处理原则
   * 对原始 ByteBuf 不做处理，调用 ctx.fireChannelRead(msg) 向后传递，这时无须 release
-  * 将原始 ByteBuf 转换为其它类型的 Java 对象，这时 ByteBuf 就没用了，必须 release
+  * **将原始 ByteBuf 转换为其它类型的 Java 对象，这时 ByteBuf 就没用了，必须 release**
   * 如果不调用 ctx.fireChannelRead(msg) 向后传递，那么也必须 release
   * 注意各种异常，如果 ByteBuf 没有成功传递到下一个 ChannelHandler，必须 release
   * 假设消息一直向后传，那么 TailContext 会负责释放未处理消息（原始的 ByteBuf）
