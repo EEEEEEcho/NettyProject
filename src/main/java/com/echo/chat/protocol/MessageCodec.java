@@ -42,7 +42,7 @@ public class MessageCodec extends ByteToMessageCodec<Message> {
         byte version = byteBuf.readByte();  //1个字节的版本
         byte serializeType = byteBuf.readByte();    //1字节的序列化方式
         byte messageType = byteBuf.readByte();  //1字节的指令类型
-        int sequenceId = byteBuf.readInt(); //1字节的序列号
+        int sequenceId = byteBuf.readInt(); //4字节的序列号
         byteBuf.readByte(); //跳过填充字节
         int length = byteBuf.readInt(); //消息的长度
 
