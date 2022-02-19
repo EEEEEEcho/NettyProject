@@ -1,10 +1,12 @@
 # 一. NIO 基础
 
-non-blocking io 非阻塞 IO
+netty的底层是NIO。non-blocking io 非阻塞 IO。NIO的三大重要组件就是Channel Buffer Selector
 
 ## 1. 三大组件
 
 ### 1.1 Channel & Buffer
+
+channel是数据传输的通道，buffer是内存中的一个缓冲区，用来暂存channel中传输的数据。
 
 channel 有一点类似于 stream，它就是读写数据的**双向通道**，可以从 channel 将数据读入 buffer，也可以将 buffer 的数据写入 channel，而之前的 stream 要么是输入，要么是输出，channel 比 stream 更为底层
 
@@ -17,9 +19,9 @@ buffer --> channel
 常见的 Channel 有
 
 * FileChannel
-* DatagramChannel
-* SocketChannel
-* ServerSocketChannel
+* DatagramChannel  UDP传输
+* SocketChannel  TCP传输
+* ServerSocketChannel TCP传输
 
 
 
@@ -480,13 +482,13 @@ class java.nio.DirectByteBuffer
 * 调用 buffer 自己的 put 方法
 
 ```java
-int readBytes = channel.read(buf);
+int readBytes = channel.read(buf);	//从channel读，向buffer写
 ```
 
 和
 
 ```java
-buf.put((byte)127);
+buf.put((byte)127);//直接向buffer写
 ```
 
 
@@ -499,13 +501,13 @@ buf.put((byte)127);
 * 调用 buffer 自己的 get 方法
 
 ```java
-int writeBytes = channel.write(buf);
+int writeBytes = channel.write(buf);//从buffer读，向channel写
 ```
 
 和
 
 ```java
-byte b = buf.get();
+byte b = buf.get();//直接从buffer读
 ```
 
 get 方法会让 position 读指针向后走，如果想重复读取数据
@@ -734,7 +736,7 @@ Hello
 onetwothree
 ```
 
-使用如下方式读取，可以将数据填充至多个 buffer
+使用如下方式读取，可以将数据填充至多个 buffer，一个通道内的数据，分散填充到多个bytebuffer
 
 ```java
 try (RandomAccessFile file = new RandomAccessFile("helloword/3parts.txt", "rw")) {
@@ -1680,7 +1682,7 @@ sc.connect(new InetSocketAddress("localhost", 8080));
 System.out.println("waiting...");
 ```
 
-
+阻塞模式下。当第一个客户端C1连进来的时候，因为服务端在accept()监听，所以能够正确监听到C1的连接，然后继续向下走for循环中读取到C1的数据。读取完之后，当C1再次发送数据的时候，服务端就没办法接受了，因为for循环结束了，服务端去accept()监听新的连接了。没办法处理C1的数据发送。这时，只有另一个客户端C2连接了上来，然后服务端处理了阻塞accept()，才可以继续读取C1的发送。总之，就是阻塞模式下，服务端只能处理读取或者接受数据。
 
 #### 非阻塞
 

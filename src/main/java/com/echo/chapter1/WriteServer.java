@@ -3,10 +3,7 @@ package com.echo.chapter1;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.nio.charset.Charset;
 import java.util.Iterator;
 
@@ -77,6 +74,27 @@ public class WriteServer {
                     }
                 }
                 iterator.remove();
+            }
+        }
+    }
+    public static void method1() throws IOException {
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.bind(new InetSocketAddress(8080));
+        ssc.configureBlocking(false);
+        Selector selector = Selector.open();
+        ssc.register(selector,SelectionKey.OP_ACCEPT);
+        while (true){
+            selector.select();
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey key = iterator.next();
+                iterator.remove();
+                if (key.isAcceptable()){
+                    ServerSocketChannel channel = (ServerSocketChannel) key.channel();
+                    SocketChannel sc = channel.accept();
+                    sc.configureBlocking(false);
+                    sc.register(selector,SelectionKey.OP_READ);
+                }
             }
         }
     }

@@ -13,7 +13,9 @@ for rapid development of maintainable high performance protocol servers & client
 
 Netty 是一个异步的、基于事件驱动的网络应用框架，用于快速开发可维护、高性能的网络服务器和客户端
 
-这里的异步并不是上一章所说的异步编程模型，而是指netty使用了多线程。netty的IO模型还是多路复用的
+其底层仍然是多路复用的selector技术
+
+这里的异步并不是上一章所说的异步编程模型，而是指netty使用了多线程，完成了方法调用和结果处理相分离。netty的IO模型还是多路复用的
 
 ### 1.2 Netty 的作者
 
@@ -165,13 +167,13 @@ new Bootstrap()
 
 > 一开始需要树立正确的观念
 >
-> * 把 channel 理解为数据的通道
+> * 把 channel 理解为数据的通道，可以将数据读出来，也可以将数据写进去
 > * 把 msg 理解为流动的数据，最开始输入是 ByteBuf，但经过 pipeline 的加工，会变成其它类型对象，最后输出又变成 ByteBuf
 > * 把 handler 理解为数据的处理工序
->   * 工序有多道，合在一起就是 pipeline，pipeline 负责发布事件（读、读取完成...）传播给每个 handler， handler 对自己感兴趣的事件进行处理（重写了相应事件处理方法）
+>   * 工序有多道，合在一起就是 pipeline，将多个handler的处理流程（handler流水线）进行抽象，抽象出了pipeline的概念。pipeline 负责发布事件（读、读取完成...）传播给每个 handler， handler 对自己感兴趣的事件进行处理（重写了相应事件处理方法，如读事件和写事件）
 >   * handler 分 Inbound 和 Outbound 两类，即入站工序和出站工序
 > * 把 eventLoop 理解为处理数据的工人
->   * 工人可以管理多个 channel 的 io 操作，并且一旦工人负责了某个 channel，就要负责到底（绑定）
+>   * 工人可以管理多个 channel 的 io 操作，并且一旦工人负责了某个 channel，就要负责到底（绑定），即一个EventLoop负责了某个channel，那么以后都是这个EventLoop负责这个channel。一个EventLoop可以和一个channel绑定，但是一个EventLoop可以处理多个channel。channel和EventLoop之间是多对一的关系。
 >   * 工人既可以执行 io 操作，也可以进行任务处理，每位工人有任务队列，队列里可以堆放多个 channel 的待处理任务，任务分为普通任务、定时任务
 >   * 工人按照 pipeline 顺序，依次按照 handler 的规划（代码）处理数据，可以为每道工序指定不同的工人
 
@@ -420,14 +422,14 @@ new ServerBootstrap()
 ```java
 static void invokeChannelRead(final AbstractChannelHandlerContext next, Object msg) {
     final Object m = next.pipeline.touch(ObjectUtil.checkNotNull(msg, "msg"), next);
-    // 下一个 handler 的事件循环是否与当前的事件循环是同一个线程
+    // 下一个 handler 的EventLoop是否与当前的EventLoop是同一个线程
     EventExecutor executor = next.executor();
     
     // 是，直接调用
     if (executor.inEventLoop()) {
         next.invokeChannelRead(m);
     } 
-    // 不是，将要执行的代码作为任务提交给下一个事件循环处理（换人）
+    // 不是，将要执行的代码作为任务提交给下一个EventLoop（换人）,我们重新分配的EventLoop
     else {
         executor.execute(new Runnable() {
             @Override
@@ -440,7 +442,7 @@ static void invokeChannelRead(final AbstractChannelHandlerContext next, Object m
 ```
 
 * 如果两个 handler 绑定的是同一个线程，那么就直接调用
-* 否则，把要调用的代码封装为一个任务对象，由下一个 handler 的线程来调用
+* 否则，把要调用的代码封装为一个任务对象，由下一个 handler 的线程来调用（我们分配给该handler的专有的eventLoop)
 
 ![image-20210927153201173](Netty02-netty-touch.assets/image-20210927153201173.png)
 

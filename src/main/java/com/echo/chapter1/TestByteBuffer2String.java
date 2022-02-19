@@ -31,7 +31,7 @@ public class TestByteBuffer2String {
         String buffer1Str = StandardCharsets.UTF_8.decode(buffer1).toString();
         System.out.println(buffer1Str);
 
-        //buffer.flip();
+//        buffer.flip();
         String bufferStr = StandardCharsets.UTF_8.decode(buffer).toString();
         System.out.println(bufferStr);  //什么也不打印，或者乱码，因为该buffer仍是写模式
     }

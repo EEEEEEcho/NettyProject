@@ -30,8 +30,13 @@ public class SelectorServer {
          * read:数据可读事件
          * write:数据可写事件
          */
+
         SelectionKey sscKey = ssc.register(selector, 0, null);
         sscKey.interestOps(SelectionKey.OP_ACCEPT); //指明了sscKey只关注accept事件，上面的ops：0表示不关注任何事件
+        //上述操作将ServerSocketChannel的Accept事件注册到了selector中。selector就会关注该事件，如果发生了该事件
+        //那么selector会将发生该事件的key拿出来，然后根据这个key获取发生事件的channel，然后操作该channel
+
+
         log.debug("Register Key:{}",sscKey);
 
         ssc.bind(new InetSocketAddress(8080));

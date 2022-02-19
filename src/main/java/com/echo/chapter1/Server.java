@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channel;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
@@ -29,7 +30,7 @@ public class Server {
             //4.accept tcp三次握手后建立与客户端的连接 SocketChannel 与客户端之间通信
             log.debug("Connecting ....");
             SocketChannel sc = ssc.accept();   //阻塞方法，线程停止运行，等待客户端
-            log.debug("Connected ....");
+            log.debug("Connected ....{}",sc);
             channels.add(sc);
             //5.接收客户端发送的数据
             for(SocketChannel channel :channels){
@@ -44,5 +45,20 @@ public class Server {
                 log.debug("After Read .... {}",channel);
             }
         }
+//        ByteBuffer buffer = ByteBuffer.allocate(16);
+//        ServerSocketChannel ssc = ServerSocketChannel.open();
+//        ssc.bind(new InetSocketAddress(8080));
+//        List<SocketChannel> channels = new ArrayList<>();
+//        while (true){
+//            //建立连接
+//            SocketChannel sc = ssc.accept();
+//            channels.add(sc);
+//            for (SocketChannel channel : channels){
+//                channel.read(buffer);
+//                buffer.flip();
+//                debugRead(buffer);
+//                buffer.clear();
+//            }
+//        }
     }
 }

@@ -18,6 +18,9 @@ public class EventLoopServer {
 
 
         new ServerBootstrap()
+                //如果只传入一个EventLoopGroup，那么此EventLoopGroup中的EventLoop既负责处理accept事件也负责
+                //处理read/write事件
+                //如果传入两个EventLoopGroup，则会划分group
                 //划分group，一个group作为boss，只负责ServerSocketChannel上accept事件处理
                 // 第二个group作为worker 只负责socketChannel上的读写
                 // 因为一个worker只和一个channel绑定，所以作为boss的group只能占用一个线程

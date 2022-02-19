@@ -29,18 +29,19 @@ public class ChannelFutureDemo {
                 })
                 //5.连接到服务器
                 //connect方法是一个异步非阻塞的，main线程调用了connect，并不关心过connect是否连接上了
-                //真正执行底层connect的是NIO线程，主线程只是发起了调用
+                //真正执行底层connect的是NIO线程(NioEventLoopGroup中的线程)，主线程只是发起了调用
                 .connect(new InetSocketAddress("localhost", 8080));
 
-        //如果不调用sync()等待连接建立，主线程就会直接建立channel，这时，连接可能还没有建立
-        //解决：1.使用sync()方法同步处理结果，等待NIO线程建立连接,同步谁发起的谁等结果（主线程发起的，主线程等NIO建立完成）
+        //如果不调用sync()等待连接建立，主线程就会直接建立channel，这时，连接可能还没有建立(NioEventLoopGroup中的线程还没建立连接)
+
+        //解决：1.使用sync()方法同步处理结果，等待NIO线程建立连接,同步是谁发起的谁等待结果（主线程发起的，主线程等NIO建立完成）
 //        channelFuture.sync();//阻塞住当前线程，直到NIO线程建立连接完毕
 //        Channel channel = channelFuture.channel();
 //        log.debug("{}",channel);
 //        channel.writeAndFlush("Hello , world");
 
-        //解决：2.使用addListener(回调对象)方法处理异步结果（谁发起的，别人处理结果。主线程发起的，NIO处理结果）
-        //NIO建立好连接之后，会调用(NIO线程调用，不是main线程调用)回调对象中的operationComplete方法处理结果
+        //解决：2.使用addListener(回调对象)方法处理异步结果（谁发起的，别人处理结果。主线程发起的，NioEventLoopGroup中的线程处理结果）
+        //NioEventLoopGroup中的线程建立好连接之后，会调用(NioEventLoopGroup中的线程调用，不是main线程调用)回调对象中的operationComplete方法处理结果
         channelFuture.addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture channelFuture) throws Exception {
