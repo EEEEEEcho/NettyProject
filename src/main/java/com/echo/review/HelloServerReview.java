@@ -14,6 +14,7 @@ import io.netty.handler.codec.string.StringDecoder;
 public class HelloServerReview {
     public static void main(String[] args) {
         new ServerBootstrap()
+                //NioEventLoop中打开了selector
                 .group(new NioEventLoopGroup())
                 .channel(NioServerSocketChannel.class)
                 .childHandler(new ChannelInitializer<NioSocketChannel>() {

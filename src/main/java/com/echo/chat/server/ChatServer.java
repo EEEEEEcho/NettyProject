@@ -49,6 +49,7 @@ public class ChatServer {
                     //用来判断是不是读空闲时间过长或者写空闲事件过长
                     //参数一：最大读空闲时长。这里的5代表，5秒内如果没有读到一个channel的
                     //数据，会触发一个IdleState#READER_IDLE事件
+                    //将触发到的IdleState事件传递给ChannelDuplexHandler处理
                     socketChannel.pipeline().addLast(new IdleStateHandler(5,0,0));
                     //ChannelDuplexHandler可以作为一个双向的处理器，处理入站和出站事件
                     socketChannel.pipeline().addLast(new ChannelDuplexHandler(){
@@ -67,7 +68,7 @@ public class ChatServer {
                     });
 
 
-                    //添加一个只对LoginRequestMessage的消息感兴趣的handler
+                    // 添加一个只对LoginRequestMessage的消息感兴趣的handler
                     socketChannel.pipeline().addLast(LOGIN_REQUEST_HANDLER);
                     // 添加一个只对ChatRequestMessage感兴趣的handler
                     socketChannel.pipeline().addLast(CHAT_REQUEST_HANDLER);

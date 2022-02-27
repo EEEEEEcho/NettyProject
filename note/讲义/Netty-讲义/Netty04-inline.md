@@ -258,7 +258,7 @@ public abstract class Message implements Serializable {
 #### 1）CONNECT_TIMEOUT_MILLIS
 
 * 属于 SocketChannal 参数
-* 用在客户端建立连接时，如果在指定毫秒内无法连接，会抛出 timeout 异常
+* 用在**客户端**建立连接时，如果在指定毫秒内无法连接，会抛出 timeout 异常
 
 * SO_TIMEOUT 主要用在阻塞 IO，阻塞 IO 中 accept，read 等都是无限等待的，如果不希望永远阻塞，使用它调整超时时间
 
@@ -309,6 +309,13 @@ public final void connect(
     }
 	// ...
 }
+```
+
+另外，对于服务端来说
+
+```java
+        new ServerBootstrap().option();         //给ServerSocketChannel配置参数
+        new ServerBootstrap().childOption();    //给SocketChannel配置参数
 ```
 
 
@@ -434,13 +441,13 @@ java.net.SocketTimeoutException: connect timed out
 
 #### 3）ulimit -n
 
-* 属于操作系统参数
+* 属于操作系统参数,调整一个进程能够打开的文件描述符(fd)的数量。为了应对高并发量，应该调整该参数。
 
 
 
 #### 4）TCP_NODELAY
 
-* 属于 SocketChannal 参数
+* 属于 SocketChannal 参数 linux中的选项为false默认开启Nagle算法，调优可以设置为true
 
 
 
@@ -1581,7 +1588,17 @@ private void processSelectedKey(SelectionKey k, AbstractNioChannel ch) {
 }
 ```
 
+NioEventLoop:
 
+- selector 何时创建？
+  - 在构造方法调用时创建
+- eventloop为何有两个selector成员？
+  - 一个是原始的selector，其中的selectkeys是使用集合进行遍历的。另一种是将原始的selector进行包装的，使用数组遍历的selectkeys，性能要高。
+  - 这两个selector其实就是为了遍历selectkeys时更高效。
+- eventloop的nio线程在何时启动？
+  - 在首次调用execute方法时启动。并且通过一个状态位控制线程，保证线程只会启动一次。
+- 普通任务会不会停止select()的阻塞呢？
+  - 会，普通任务在EventLoop中执行时，会打断当前EventLoop的select阻塞，并执行线程
 
 ### 2.3 accept 剖析
 

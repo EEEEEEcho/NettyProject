@@ -3,6 +3,7 @@ package com.echo.chat.protocol;
 import com.echo.chat.config.Config;
 import com.echo.chat.message.Message;
 import com.sun.xml.internal.messaging.saaj.util.ByteOutputStream;
+import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -17,6 +18,7 @@ import java.util.List;
 /**
  * 继承自MessageToMessageCodec，可以使用Sharable注解，
  * 因为MessageToMessageCodec默认每次收到的消息都是完整的，不会存在半包现象
+ * 两个泛型参数，要转换的两种消息
  */
 @ChannelHandler.Sharable
 @Slf4j
@@ -38,8 +40,6 @@ public class MessageCodecSharable extends MessageToMessageCodec<ByteBuf,Message>
         byteBuf.writeInt(message.getSequenceId());
         //一个字节的对齐填充，因为上面一共15个字节
         byteBuf.writeByte(0xff);
-
-
 
 //        ByteOutputStream bos = new ByteOutputStream();
 //        ObjectOutputStream oos = new ObjectOutputStream(bos);
@@ -87,8 +87,7 @@ public class MessageCodecSharable extends MessageToMessageCodec<ByteBuf,Message>
             //反序列化
             Object deserialize = algorithm.deserialize(messageClass, bytes);
             //打印日志
-//            log.debug("{},{},{},{},{},{}",magicNum,version,serializeType,messageType,sequenceId,length);
-//            log.debug("{}",message);
+            log.debug("{},{},{},{},{},{}",magicNum,version,serializeType,messageType,sequenceId,length);
 
             //为了给下一个handler使用，需要将消息放到list中
             list.add(deserialize);

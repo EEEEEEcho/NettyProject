@@ -52,12 +52,12 @@ public class CloseFutureClient {
         ChannelFuture closeFuture = channel.closeFuture();
         // 1）同步处理关闭，
 //        log.debug("waiting close ...");
-//        closeFuture.sync(); //调用close方法之后，等待关闭完成
+//        closeFuture.sync(); //调用close方法之后，等待关闭完成，主线程阻塞，
 //        log.debug("处理关闭之后的操作");
         //2）异步处理关闭
         closeFuture.addListener((ChannelFutureListener) channelFuture1 -> {
             log.debug("处理 关闭之后的操作");
-            //关闭EventLoopGroup
+            //关闭EventLoopGroup，将EventLoopGroup优雅的关闭，停止连接请求，处理当前所有的连接
             eventLoopGroup.shutdownGracefully();
         });
     }

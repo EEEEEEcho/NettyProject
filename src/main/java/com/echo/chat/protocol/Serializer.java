@@ -47,14 +47,18 @@ public interface Serializer {
             @Override
             public <T> T deserialize(Class<T> clazz, byte[] bytes) {
                 Gson gson = new GsonBuilder().registerTypeAdapter(Class.class, new ClassCodec()).create();
+                //从字节数组还原为json字符串
                 String json = new String(bytes, StandardCharsets.UTF_8);
+                //通过json字符串还原回对象
                 return gson.fromJson(json, clazz);
             }
 
             @Override
             public <T> byte[] serialize(T object) {
                 Gson gson = new GsonBuilder().registerTypeAdapter(Class.class, new ClassCodec()).create();
+                //将对象变为json字符串
                 String json = gson.toJson(object);
+                //将json字符串变为字节数组
                 return json.getBytes(StandardCharsets.UTF_8);
             }
         }

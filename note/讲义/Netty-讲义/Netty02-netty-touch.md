@@ -953,7 +953,7 @@ public class CloseFutureClient {
 要点
 
 * 单线程没法异步提高效率，必须配合多线程、多核 cpu 才能发挥异步的优势
-* 异步并没有缩短响应时间，反而有所增加，请求的响应时间反而增加了，但是单位时间内的吞吐量大幅增加
+* 异步并没有缩短响应时间，反而有所增加，请求的响应时间反而增加了，但是**单位时间内的吞吐量**大幅增加
 * 合理进行任务拆分，也是利用异步的关键
 
 
@@ -1545,7 +1545,7 @@ ByteBuf buffer = ByteBufAllocator.DEFAULT.buffer(10);
 log(buffer);
 ```
 
-上面代码创建了一个默认的 ByteBuf（池化基于直接内存的 ByteBuf），初始容量是 10
+上面代码创建了一个默认的 ByteBuf（池化基于直接内存的 ByteBuf），初始容量是 10,ByteBuf动态扩容
 
 输出
 
@@ -1579,7 +1579,7 @@ private static void log(ByteBuf buffer) {
 ByteBuf buffer = ByteBufAllocator.DEFAULT.heapBuffer(10);
 ```
 
-也可以使用下面的代码来创建池化基于直接内存的 ByteBuf
+也可以使用下面的代码来创建池化基于直接内存的 ByteBuf，netty默认使用的是直接内存
 
 ```java
 ByteBuf buffer = ByteBufAllocator.DEFAULT.directBuffer(10);
